@@ -11,9 +11,14 @@ import time
 from multiprocessing import Process
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-def requestRefreshToken():
-    global token
-    global refreshToken
+def generateCrdpPDF(file, indir):
+    return file.write(
+        img2pdf.convert(
+            [os.path.join(indir, i) for i in sorted(os.listdir(indir), key=lambda x: int(x.split('.')[0]))]
+        )
+    )
+
+def requestRefreshToken(token, refreshToken):
     print("Refreshing token")
     httpRequestRefreshToken = requests.post("http://80.81.152.155:8085/api/v2/users/refresh",
         headers = {'Content-Type': 'application/json'},
@@ -27,10 +32,10 @@ def requestRefreshToken():
     except KeyError:
         print("Failure at refreshing token")
     del requestRefreshTokenJSONResponse
+    return token, refreshToken
 
 def crdpDecryptor(folder):
     aad = None
-    # AES-128 = 32 chars, AES-256 = 64 chars (hex expression)
     key = 'ha31ebFbckaegBc1e4daD35safP15Rvh'
     aesgcm = AESGCM(key.encode('utf-8'))
 
@@ -41,9 +46,9 @@ def crdpDecryptor(folder):
             nonce = infile.read(12)
             outfile = open(filename + ".dec", 'wb+')
             while True:
-                # 2**20 % 16 bytes (128-bits) = 0... so it's fine
-                chunk = infile.read(2 ** 20)
-                if not chunk: break
+                chunk = infile.read(1048576)
+                if not chunk:
+                    break
                 outfile.write(aesgcm.decrypt(nonce, chunk, aad))
             del nonce
             del outfile
@@ -59,7 +64,7 @@ if __name__ == "__main__":
     parser.add_argument('-l', '--language', help='set language (either en or fr or ar) (default en)', default='en')
     parser.add_argument('-g', '--grade', help='limit results to only grade')
     parser.add_argument('-d', '--download', help='specify which id to download, for all use __all__')
-    parser.add_argument('-o', '--output', help='output path', default=os.getcwd())
+    parser.add_argument('-o', '--output', help='output path', default=".")
     args = parser.parse_args()
     del parser
 
@@ -84,7 +89,9 @@ if __name__ == "__main__":
     del listOfBooksRequest
 
     if args.download is not None:
-        class UUIDFound(Exception): pass
+        class UUIDFound(Exception):
+            pass
+
         if args.download == "__all__":
             args.download = []
             for classGrade in responseListOfBooksJSON['result']:
@@ -97,7 +104,7 @@ if __name__ == "__main__":
             args.download = args.download.split(" ")
 
         for uuid in args.download:
-            print ("Downloading %s" % uuid)
+            print ("Downloading %s" % (uuid,))
             while True:
                 bookDataZipRequest = requests.get("http://80.81.152.155:8085/api/v1/books/download/" + uuid,
                     stream = True,
@@ -108,7 +115,7 @@ if __name__ == "__main__":
                     }
                 )
                 if bookDataZipRequest.status_code != 200:
-                    requestRefreshToken()
+                    token, tefreshToken = requestRefreshToken(token, refreshToken)
                 else:
                     break
             bookDataZipFile = tempfile.NamedTemporaryFile(delete=False)
@@ -122,12 +129,8 @@ if __name__ == "__main__":
                 with tempfile.NamedTemporaryFile(delete=False) as pdf:
                     # This is needed because Pillow has memory leaks
                     p = Process(
-                            target=pdf.write,
-                            args=(
-                                img2pdf.convert(
-                                    [os.path.join(extractedBookDataZip, i) for i in sorted(os.listdir(extractedBookDataZip), key=lambda x: int(x.split('.')[0]))]
-                                ),
-                        )
+                        target=generateCrdpPDF,
+                        args=(pdf, extractedBookDataZip)
                     )
                     p.start()
                     while p.is_alive():
@@ -139,7 +142,8 @@ if __name__ == "__main__":
             try:
                 for classGrade in responseListOfBooksJSON['result']:
                     for book in responseListOfBooksJSON['result'][classGrade]:
-                        if book['Id'] == uuid: raise UUIDFound
+                        if book['Id'] == uuid:
+                            raise UUIDFound
             except UUIDFound:
                 filebase = classGrade + ' - ' + book['Title']
                 finalFile=os.path.join(args.output, filebase + '.pdf')
@@ -149,7 +153,7 @@ if __name__ == "__main__":
                     tryToGetAvailFile+=1
                 shutil.copyfile(pdf.name, finalFile)
                 os.remove(pdf.name)
-                print ("Done %s" % uuid)
+                print ("Done %s" % (uuid,))
                 del pdf
                 del classGrade
                 del book
@@ -159,10 +163,11 @@ if __name__ == "__main__":
     else:
         for classGrade in sorted(responseListOfBooksJSON['result']):
             if args.grade is not None:
-                if args.grade.lower() != classGrade.lower(): continue
-            print ("%s:" % classGrade)
+                if args.grade.lower() != classGrade.lower():
+                    continue
+            print ("%s:" % (classGrade,))
             for book in responseListOfBooksJSON['result'][classGrade]:
-                print ("  %s" % book['Title'])
-                print ("  %s" % book['Id'])
-                print ("  %s" % book['Cover'])
+                print ("  %s" % (book['Title'],))
+                print ("  %s" % (book['Id'],))
+                print ("  %s" % (book['Cover'],))
                 print ()
